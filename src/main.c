@@ -1,10 +1,32 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+#include <stdbool.h>
 
 #include "portaudio/portaudio.h"
 
-#define SAMPLE_RATE 44100
+
+#define SAMPLE_RATE 22050
+//#define SAMPLE_RATE 44100
+
+#define USE_PRECALC 1
+
+const float MAXDIST = 200.0;
+const float MINDIST = 40.0;
+
+const double CS = 343.0;
+const double LPOS = -0.075;
+const double RPOS = +0.075;
+const double DECAY = 1.1;
+const double EXP_DROP = 0.015;
+const double EXP_SCALE = 45.0;
+const double S_BASE = 45.0;
+const double PITCH_SCALE = 18.0;
+
+const double VOLUME = 0.55;
+const double DROPCOUNT = 50;
+
+
 
 typedef struct
 {
@@ -14,6 +36,9 @@ typedef struct
 	double size;
 	//frequency of drop
 	double period;
+
+	double precalc_dr, precalc_dl;
+	double precalc_dpcsr, precalc_dpcsl;
 } drop_t;
 
 typedef struct 
@@ -36,8 +61,6 @@ float randomf(float min, float max)
 	return ((float)rand() / (float)(RAND_MAX)) * (max - min) + min;
 }
 
-const float MAXDIST = 400.0;
-const float MINDIST = 40.0;
 state_data random_drops(double volume, size_t dropc)
 {
 	drop_t *drops = malloc(dropc * sizeof(drop_t));
@@ -48,20 +71,33 @@ state_data random_drops(double volume, size_t dropc)
 		drops[i].posf = randomf(MINDIST, MAXDIST);
 		drops[i].size = randomf(0.8, 1.2);
 		drops[i].period = randomf(1.5, 5.5);
+		double offr = RPOS - drops[i].posr;
+		double offl = LPOS - drops[i].posr;
+		double posf2 = drops[i].posf * drops[i].posf;
+		drops[i].precalc_dr = sqrt(offr * offr + posf2);
+		drops[i].precalc_dl = sqrt(offl * offl + posf2);
+		drops[i].precalc_dpcsr = drops[i].precalc_dr / CS;
+		drops[i].precalc_dpcsl = drops[i].precalc_dl / CS;
 	}
 
 	state_data ret = { .time = 2.0, .volume = volume, .dropv = drops, .dropc = dropc };
 	return ret;
 }
 
-const double CS = 343.0;
-const double LPOS = -0.075;
-const double RPOS = +0.075;
-const double DECAY = 1.1;
-const double EXP_DROP = 0.015;
-const double EXP_SCALE = 45.0;
-const double S_BASE = 45.0;
-const double PITCH_SCALE = 18.0;
+double drop_sound_precalc(drop_t drop, double time, bool right)
+{
+	double rel_time = fmod(time, drop.period);
+	double t = rel_time - (right ? drop.precalc_dpcsr : drop.precalc_dpcsl);
+
+	if (t < 0.0)
+		return 0.0;
+
+	double s = pow(S_BASE, 1.0 + t);
+	double source_sample = exp((-t - EXP_DROP) * EXP_SCALE) * sin(s * PITCH_SCALE * drop.size);
+	double final_sample = source_sample / (1 + (right ? drop.precalc_dr : drop.precalc_dl) * DECAY);
+	return final_sample;
+}
+
 double drop_sound(drop_t drop, double time, double sample_posr)
 {
 	double rel_time = fmod(time, drop.period);
@@ -78,8 +114,6 @@ double drop_sound(drop_t drop, double time, double sample_posr)
 	return final_sample;
 }
 
-const double VOLUME = 0.35;
-const double DROPCOUNT = 80;
 int main(int argc, char *argv[])
 {
 	(void)argc;
@@ -144,8 +178,13 @@ int stream_callback(const void *inputBuffer, void *outputBuffer, unsigned long f
 
 		for (size_t i = 0; i < state->dropc; i++)
 		{
+			#if USE_PRECALC == 1
+			lsample += drop_sound_precalc(state->dropv[i], state->time, false);
+			rsample += drop_sound_precalc(state->dropv[i], state->time, true);
+			#else
 			lsample += drop_sound(state->dropv[i], state->time, LPOS);
 			rsample += drop_sound(state->dropv[i], state->time, RPOS);
+			#endif
 		}
 
 		*(out_buff++) = (float)(lsample * state->volume);
