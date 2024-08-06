@@ -6,8 +6,7 @@ TEST=tests
 OBJ=build/obj
 BIN=build/bin
 INC=include
-LIB=libs
-DEPS=rt m asound jack pthread
+DEPS=rt m asound jack pthread portaudio
 
 OUTBIN=$(BIN)/rain
 
@@ -28,7 +27,7 @@ run: $(OUTBIN)
 
 $(OUTBIN): $(OBJS)
 	@mkdir -p $(@D)
-	$(CC) $(C_FLAGS) $^ $(LIB)/libportaudio.a $(DEP_LST) -o $@
+	$(CC) $(C_FLAGS) $^ $(DEP_LST) -o $@
 
 $(OBJ)/%.o: $(SRC)/%.c
 	@mkdir -p $(@D)
